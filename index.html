@@ -1044,8 +1044,7 @@ function exportCSV() {
 // ═══════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC
 // ═══════════════════════════════════════════════════════
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwMATzn16TMINrlEhYxMGN9baVexm9XKRrxbUS7Maq0F7GC53h9cQP6cvcI2hTUv8gT/exec';
-
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzgr423tv6D7B9pbUdnJFDrkVwbxxRQ2QlWlUYMQ26X19if9p4YxixiC8zPrNLkWjjv/exec';
 async function syncToSheets(expense) {
   try {
     const trip = state.trips.find(t=>t.id===expense.tripId);
