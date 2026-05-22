@@ -255,8 +255,8 @@
 
   .pb-nav { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 
-  .delete-btn { background: var(--coral); color: white; border: none; border-radius: 10px; padding: 8px 12px; font-size: 12px; cursor: pointer; margin-left: 8px; flex-shrink: 0; display: none; }
-  .expense-item.show-delete .delete-btn { display: block; }
+  .delete-btn { background: none; border: none; font-size: 16px; cursor: pointer; margin-left: 4px; flex-shrink: 0; padding: 4px 6px; opacity: 0.45; }
+  .delete-btn:active { opacity: 1; }
 
   .big-stat { text-align: center; padding: 8px 0 16px; }
   .big-stat .value { font-family: 'Sora', sans-serif; font-size: 40px; font-weight: 700; color: var(--violet); }
@@ -482,7 +482,8 @@
 <div class="modal-overlay" id="modal-add-expense">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <div class="modal-title">Add Expense 💸</div>
+    <div class="modal-title" id="expense-modal-title">Add Expense 💸</div>
+    <input type="hidden" id="expense-edit-id" value="">
     <div class="amount-display">
       <input type="number" id="expense-amount" placeholder="0.00" inputmode="decimal">
       <div class="currency-label" id="expense-currency-label">SGD</div>
@@ -520,7 +521,7 @@
         <button id="shared-yes" onclick="setShared(true)" style="flex:1;padding:12px;border-radius:12px;border:1.5px solid var(--border);background:white;color:var(--text);font-weight:600;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif">Shared</button>
       </div>
     </div>
-    <button class="btn-primary" onclick="saveExpense()">Add Expense ✓</button>
+    <button class="btn-primary" id="expense-save-btn" onclick="saveExpense()">Add Expense ✓</button>
     <button class="btn-secondary" onclick="closeModal('modal-add-expense')">Cancel</button>
   </div>
 </div>
@@ -725,32 +726,55 @@ function showTab(tab) {
 // ═══════════════════════════════════════════════════════
 //  EXPENSES
 // ═══════════════════════════════════════════════════════
-function openAddExpense() {
-  const trip = state.trips.find(t => t.id === state.currentTripId);
-  selectedCategory = null; isShared = false;
-
-  document.getElementById('category-chips').innerHTML = CATEGORIES.map(c =>
-    `<div class="chip" onclick="selectCategory('${c.id}',this)"><span>${c.icon}</span>${c.label}</div>`
-  ).join('');
+// ── shared helper: populate the expense modal fields ──
+function _populateExpenseModal(trip, expense) {
+  selectedCategory = expense?.category || null;
+  isShared = expense?.shared || false;
 
   const currencies = ['SGD', trip?.currency||'CNY'];
-  document.getElementById('currency-group').innerHTML = currencies.map((c,i) =>
-    `<div class="currency-btn ${i===0?'selected':''}" onclick="selectCurrency('${c}',this)">${c}</div>`
+  document.getElementById('currency-group').innerHTML = currencies.map((c,i) => {
+    const sel = expense ? c === expense.currency : i === 0;
+    return `<div class="currency-btn ${sel?'selected':''}" onclick="selectCurrency('${c}',this)">${c}</div>`;
+  }).join('');
+
+  document.getElementById('category-chips').innerHTML = CATEGORIES.map(c =>
+    `<div class="chip ${expense?.category===c.id?'selected':''}" onclick="selectCategory('${c.id}',this)"><span>${c.icon}</span>${c.label}</div>`
   ).join('');
 
-  const now = new Date();
-  document.getElementById('expense-date').value = now.toISOString().split('T')[0];
-  document.getElementById('expense-time').value = now.toTimeString().slice(0,5);
-  document.getElementById('expense-amount').value = '';
-  document.getElementById('expense-note').value = '';
-  document.getElementById('expense-currency-label').textContent = 'SGD';
+  document.getElementById('expense-amount').value  = expense?.amount || '';
+  document.getElementById('expense-note').value    = expense?.note   || '';
+  document.getElementById('expense-date').value    = expense?.date   || new Date().toISOString().split('T')[0];
+  document.getElementById('expense-time').value    = expense?.time   || new Date().toTimeString().slice(0,5);
+  document.getElementById('expense-currency-label').textContent = expense?.currency || 'SGD';
 
   const people = trip?.people?.length ? trip.people : ['Me'];
-  document.getElementById('expense-paid-by').innerHTML = people.map(p => `<option>${p}</option>`).join('');
+  document.getElementById('expense-paid-by').innerHTML = people.map(p =>
+    `<option${expense?.paidBy===p?' selected':''}>${p}</option>`
+  ).join('');
 
-  document.getElementById('shared-no').style.cssText = 'flex:1;padding:12px;border-radius:12px;border:1.5px solid var(--border);background:var(--violet);color:white;font-weight:600;cursor:pointer;font-size:13px;font-family:\'DM Sans\',sans-serif';
-  document.getElementById('shared-yes').style.cssText = 'flex:1;padding:12px;border-radius:12px;border:1.5px solid var(--border);background:white;color:var(--text);font-weight:600;cursor:pointer;font-size:13px;font-family:\'DM Sans\',sans-serif';
+  const sharedBase = 'flex:1;padding:12px;border-radius:12px;border:1.5px solid var(--border);font-weight:600;cursor:pointer;font-size:13px;font-family:\'DM Sans\',sans-serif;';
+  document.getElementById('shared-no').style.cssText  = sharedBase + (isShared ? 'background:white;color:var(--text)' : 'background:var(--violet);color:white');
+  document.getElementById('shared-yes').style.cssText = sharedBase + (isShared ? 'background:var(--violet);color:white' : 'background:white;color:var(--text)');
+}
 
+function openAddExpense() {
+  const trip = state.trips.find(t => t.id === state.currentTripId);
+  document.getElementById('expense-edit-id').value = '';
+  document.getElementById('expense-modal-title').textContent = 'Add Expense 💸';
+  document.getElementById('expense-save-btn').textContent = 'Add Expense ✓';
+  _populateExpenseModal(trip, null);
+  openModal('modal-add-expense');
+  setTimeout(() => document.getElementById('expense-amount').focus(), 400);
+}
+
+function openEditExpense(id) {
+  const expense = state.expenses.find(e => e.id === id);
+  if (!expense) return;
+  const trip = state.trips.find(t => t.id === expense.tripId);
+  document.getElementById('expense-edit-id').value = id;
+  document.getElementById('expense-modal-title').textContent = 'Edit Expense ✏️';
+  document.getElementById('expense-save-btn').textContent = 'Save Changes ✓';
+  _populateExpenseModal(trip, expense);
   openModal('modal-add-expense');
   setTimeout(() => document.getElementById('expense-amount').focus(), 400);
 }
@@ -793,27 +817,55 @@ async function saveExpense() {
 
   const currency = getSelectedCurrency();
   const amountSGD = toSGD(amount, currency);
+  const editId = document.getElementById('expense-edit-id').value;
 
-  const expense = {
-    id: Date.now().toString(),
-    tripId: state.currentTripId,
-    amount, currency, amountSGD,
-    category: selectedCategory,
-    note: document.getElementById('expense-note').value.trim(),
-    date: document.getElementById('expense-date').value,
-    time: document.getElementById('expense-time').value,
-    paidBy: document.getElementById('expense-paid-by').value,
-    shared: isShared,
-    createdAt: new Date().toISOString()
-  };
-
-  state.expenses.push(expense);
-  save();
-  updateTripHeader();
-  closeModal('modal-add-expense');
-  renderExpenses();
-  showToast('Added! Syncing...');
-  await syncToSheets(expense);
+  if (editId) {
+    // ── EDIT MODE: update in-place ──
+    const idx = state.expenses.findIndex(e => e.id === editId);
+    if (idx === -1) { showToast('Expense not found'); return; }
+    const old = state.expenses[idx];
+    const updated = {
+      ...old,
+      amount, currency, amountSGD,
+      category: selectedCategory,
+      note: document.getElementById('expense-note').value.trim(),
+      date: document.getElementById('expense-date').value,
+      time: document.getElementById('expense-time').value,
+      paidBy: document.getElementById('expense-paid-by').value,
+      shared: isShared,
+      updatedAt: new Date().toISOString()
+    };
+    state.expenses[idx] = updated;
+    save();
+    updateTripHeader();
+    closeModal('modal-add-expense');
+    renderExpenses();
+    showToast('Updated! Syncing...');
+    // Delete old row from sheet then re-add updated row
+    await deleteFromSheets(editId);
+    await syncToSheets(updated);
+  } else {
+    // ── ADD MODE ──
+    const expense = {
+      id: Date.now().toString(),
+      tripId: state.currentTripId,
+      amount, currency, amountSGD,
+      category: selectedCategory,
+      note: document.getElementById('expense-note').value.trim(),
+      date: document.getElementById('expense-date').value,
+      time: document.getElementById('expense-time').value,
+      paidBy: document.getElementById('expense-paid-by').value,
+      shared: isShared,
+      createdAt: new Date().toISOString()
+    };
+    state.expenses.push(expense);
+    save();
+    updateTripHeader();
+    closeModal('modal-add-expense');
+    renderExpenses();
+    showToast('Added! Syncing...');
+    await syncToSheets(expense);
+  }
 }
 
 function renderExpenses() {
@@ -840,7 +892,7 @@ function renderExpenses() {
       ${items.map(e => {
         const cat = CATEGORIES.find(c=>c.id===e.category)||CATEGORIES[CATEGORIES.length-1];
         return `
-        <div class="expense-item" onclick="toggleDelete(this)">
+        <div class="expense-item" onclick="openEditExpense('${e.id}')">
           <div class="cat-icon" style="background:${CAT_COLORS[e.category]||'#f5f5f5'}">${cat.icon}</div>
           <div class="expense-info">
             <div class="name">${e.note||cat.label}${e.shared?'<span class="shared-badge">Shared</span>':''}</div>
@@ -850,7 +902,7 @@ function renderExpenses() {
             <div class="orig">${e.currency} ${e.amount.toFixed(2)}</div>
             ${e.currency!=='SGD'?`<div class="sgd">≈ S$${(e.amountSGD||0).toFixed(2)}</div>`:''}
           </div>
-          <button class="delete-btn" onclick="deleteExpense('${e.id}',event)">✕</button>
+          <button class="delete-btn" onclick="deleteExpense('${e.id}',event)">🗑</button>
         </div>`;
       }).join('')}`;
   }).join('');
@@ -858,16 +910,16 @@ function renderExpenses() {
   updateTripHeader();
 }
 
-function toggleDelete(el) { el.classList.toggle('show-delete'); }
-
 function deleteExpense(id, ev) {
   ev.stopPropagation();
   showConfirm(
     'Delete expense?',
-    'This will remove the expense locally. It will NOT be deleted from Google Sheets.',
-    () => {
+    'This will delete the expense locally and remove it from Google Sheets.',
+    async () => {
       state.expenses = state.expenses.filter(e => e.id !== id);
-      save(); renderExpenses(); showToast('Expense deleted');
+      save(); renderExpenses(); showToast('Deleting...');
+      await deleteFromSheets(id);
+      showToast('Deleted from Sheets ✅');
     }
   );
 }
@@ -1110,6 +1162,43 @@ async function syncToSheets(expense) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  GOOGLE SHEETS SYNC — DELETE (remove row by ID)
+// ═══════════════════════════════════════════════════════
+async function deleteFromSheets(id) {
+  const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
+  if (!url) return;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'delete', id: String(id) })
+    });
+    const data = await res.json();
+    if (!data.success) console.warn('Sheet delete failed:', data.error);
+  } catch(e) {
+    console.warn('Sheet delete error:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  GOOGLE SHEETS SYNC — DELETE TRIP (all rows by trip name)
+// ═══════════════════════════════════════════════════════
+async function deleteTripFromSheets(tripName) {
+  const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
+  if (!url) return;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'deleteTrip', tripName: tripName })
+    });
+    const data = await res.json();
+    if (!data.success) console.warn('Sheet deleteTrip failed:', data.error);
+    else console.log('Sheet deleteTrip: removed ' + data.deletedCount + ' rows');
+  } catch(e) {
+    console.warn('Sheet deleteTrip error:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC — PULL (read all rows, merge)
 // ═══════════════════════════════════════════════════════
 // Column order from sheet: Date(0) Time(1) Trip(2) Category(3) Note(4)
@@ -1277,13 +1366,18 @@ function runConfirm() {
 }
 
 function promptDeleteTrip(id, name) {
+  const trip = state.trips.find(t => t.id === id);
+  const expenseCount = state.expenses.filter(e => e.tripId === id).length;
   showConfirm(
     'Delete "' + name + '"?',
-    'This will permanently delete the trip and all its expenses.',
-    () => {
+    'This will permanently delete the trip and its ' + expenseCount + ' expense(s) — locally and from Google Sheets.',
+    async () => {
+      const tripName = trip?.name || name;
       state.trips = state.trips.filter(t => t.id !== id);
       state.expenses = state.expenses.filter(e => e.tripId !== id);
-      save(); renderTrips(); showToast('Trip deleted');
+      save(); renderTrips(); showToast('Deleting from Sheets...');
+      await deleteTripFromSheets(tripName);
+      showToast('Trip deleted ✅');
     }
   );
 }
