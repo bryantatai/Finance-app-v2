@@ -478,6 +478,43 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: EDIT TRIP ═══ -->
+<div class="modal-overlay" id="modal-edit-trip">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="edit-trip-modal-title">Edit Trip ✏️</div>
+    <input type="hidden" id="edit-trip-id">
+    <div class="form-group">
+      <label class="form-label">Trip Name</label>
+      <input class="form-input" id="edit-trip-name" placeholder="e.g. China Summer 2025">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Start Date</label>
+        <input class="form-input" id="edit-trip-start" type="date">
+      </div>
+      <div class="form-group">
+        <label class="form-label">End Date</label>
+        <input class="form-input" id="edit-trip-end" type="date">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Budget (SGD)</label>
+      <input class="form-input" id="edit-trip-budget" type="number" inputmode="numeric" placeholder="e.g. 3000">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Travellers (comma separated)</label>
+      <input class="form-input" id="edit-trip-people" placeholder="e.g. Bryan, Carissa">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Foreign Currency Code</label>
+      <input class="form-input" id="edit-trip-currency" placeholder="e.g. HKD" style="text-transform:uppercase">
+    </div>
+    <button class="btn-primary" onclick="saveEditTrip()">Save Trip ✓</button>
+    <button class="btn-secondary" onclick="closeModal('modal-edit-trip')">Cancel</button>
+  </div>
+</div>
+
 <!-- ═══ MODAL: ADD EXPENSE ═══ -->
 <div class="modal-overlay" id="modal-add-expense">
   <div class="modal-sheet">
@@ -603,7 +640,7 @@ function load() {
 // ═══════════════════════════════════════════════════════
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
   });
 }
 window.addEventListener('beforeinstallprompt', e => {
@@ -663,7 +700,10 @@ function renderTrips() {
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
           <div class="trip-badge">${t.currency||'SGD'}</div>
-          <button class="trash-btn" onclick="promptDeleteTrip('${t.id}','${tname}')">
+          <button class="trash-btn" onclick="openEditTrip('${t.id}',event)" title="Edit trip">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="trash-btn" onclick="promptDeleteTrip('${t.id}','${tname}',event)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           </button>
         </div>
@@ -694,7 +734,7 @@ function openNewTrip() {
   setTimeout(() => document.getElementById('new-trip-name').focus(), 400);
 }
 
-function saveNewTrip() {
+async function saveNewTrip() {
   const name = document.getElementById('new-trip-name').value.trim();
   if (!name) { showToast('Please enter a trip name'); return; }
   const trip = {
@@ -704,14 +744,55 @@ function saveNewTrip() {
     endDate: document.getElementById('new-trip-end').value,
     budget: parseFloat(document.getElementById('new-trip-budget').value) || 0,
     people: document.getElementById('new-trip-people').value.split(',').map(p=>p.trim()).filter(Boolean),
-    currency: (document.getElementById('new-trip-currency').value.trim()||'CNY').toUpperCase(),
+    currency: (document.getElementById('new-trip-currency').value.trim()||'SGD').toUpperCase(),
     createdAt: new Date().toISOString()
   };
   state.trips.unshift(trip);
   save();
   closeModal('modal-new-trip');
   renderTrips();
-  showToast('Trip created! ✈️');
+  showToast('Creating trip...');
+  await syncTripToSheets(trip, 'add');
+}
+
+function openEditTrip(id, ev) {
+  if (ev) ev.stopPropagation();
+  const trip = state.trips.find(t => t.id === id);
+  if (!trip) return;
+  document.getElementById('edit-trip-id').value = id;
+  document.getElementById('edit-trip-name').value = trip.name;
+  document.getElementById('edit-trip-start').value = trip.startDate || '';
+  document.getElementById('edit-trip-end').value = trip.endDate || '';
+  document.getElementById('edit-trip-budget').value = trip.budget || '';
+  document.getElementById('edit-trip-people').value = (trip.people||[]).join(', ');
+  document.getElementById('edit-trip-currency').value = trip.currency || '';
+  openModal('modal-edit-trip');
+}
+
+async function saveEditTrip() {
+  const id = document.getElementById('edit-trip-id').value;
+  const idx = state.trips.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const oldTrip = state.trips[idx];
+  const updated = {
+    ...oldTrip,
+    name: document.getElementById('edit-trip-name').value.trim(),
+    startDate: document.getElementById('edit-trip-start').value,
+    endDate: document.getElementById('edit-trip-end').value,
+    budget: parseFloat(document.getElementById('edit-trip-budget').value) || 0,
+    people: document.getElementById('edit-trip-people').value.split(',').map(p=>p.trim()).filter(Boolean),
+    currency: (document.getElementById('edit-trip-currency').value.trim()||'SGD').toUpperCase(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!updated.name) { showToast('Trip name required'); return; }
+  state.trips[idx] = updated;
+  save();
+  closeModal('modal-edit-trip');
+  renderTrips();
+  showToast('Saving...');
+  // Delete old row and rewrite with new data
+  await syncTripToSheets(oldTrip, 'delete');
+  await syncTripToSheets(updated, 'add');
 }
 
 function openTrip(id) {
@@ -1195,6 +1276,42 @@ async function syncToSheets(expense) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  GOOGLE SHEETS SYNC — TRIP (write/delete to Trips tab)
+// ═══════════════════════════════════════════════════════
+async function syncTripToSheets(trip, action) {
+  const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
+  if (!url) return;
+  try {
+    let body;
+    if (action === 'add') {
+      // Trips tab columns: ID | Name | StartDate | EndDate | Budget | People | Currency | CreatedAt
+      const row = [
+        trip.id,
+        trip.name,
+        trip.startDate || '',
+        trip.endDate   || '',
+        trip.budget    || 0,
+        (trip.people  || []).join(', '),
+        trip.currency  || 'SGD',
+        trip.createdAt || new Date().toISOString()
+      ];
+      body = { action: 'addTrip', row };
+    } else {
+      body = { action: 'deleteTrip', tripId: trip.id, tripName: trip.name };
+    }
+    const res  = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (data.success) {
+      if (action === 'add') showToast('✅ Trip saved to Sheets!');
+    } else {
+      showToast('⚠️ Trip sync failed: ' + (data.error||'unknown'));
+    }
+  } catch(e) {
+    showToast('⚠️ Trip sync error — saved locally');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC — DELETE (remove row by ID)
 // ═══════════════════════════════════════════════════════
 async function deleteFromSheets(id) {
@@ -1269,83 +1386,86 @@ async function pullFromSheets() {
   if (!url) { showToast('⚠️ Set Apps Script URL in Settings first'); return; }
   setSyncState('syncing');
   try {
-    const res = await fetch(url + '?action=getAll', { method: 'GET' });
-    const data = await res.json();
-    if (!data.success || !Array.isArray(data.rows)) {
+    // Pull BOTH tabs in parallel
+    const [tripsRes, expensesRes] = await Promise.all([
+      fetch(url + '?action=getTrips', { method: 'GET' }),
+      fetch(url + '?action=getAll',   { method: 'GET' })
+    ]);
+    const tripsData    = await tripsRes.json();
+    const expensesData = await expensesRes.json();
+
+    if (!tripsData.success || !expensesData.success) {
       setSyncState('error');
       showToast('⚠️ Could not pull from Sheets');
       return;
     }
 
-    // Skip header row if present, skip __TEST__ rows
-    const rows = data.rows.filter(r =>
+    // ── Rebuild trips from Trips tab (sheets = source of truth) ──
+    const sheetTrips = (tripsData.rows || []).filter(r =>
+      r[0] && String(r[0]) !== 'ID' && !String(r[0]).includes('__')
+    );
+    const newTrips = sheetTrips.map(r => ({
+      id:        String(r[0]||'').trim(),
+      name:      String(r[1]||'').trim(),
+      startDate: String(r[2]||'').trim(),
+      endDate:   String(r[3]||'').trim(),
+      budget:    parseFloat(r[4]) || 0,
+      people:    String(r[5]||'').split(',').map(p=>p.trim()).filter(Boolean),
+      currency:  String(r[6]||'SGD').trim(),
+      createdAt: String(r[7]||'').trim()
+    })).filter(t => t.id && t.name);
+
+    // Merge: keep any local-only trips (newly created, not yet in sheet)
+    const sheetTripIds = new Set(newTrips.map(t => t.id));
+    const localOnlyTrips = state.trips.filter(t => !sheetTripIds.has(t.id));
+    state.trips = [...newTrips, ...localOnlyTrips];
+
+    // ── Rebuild expenses from Expenses tab ──
+    const sheetExpenses = (expensesData.rows || []).filter(r =>
       r[10] && r[10] !== 'ID' && !String(r[10]).includes('__')
     );
-
-    let added = 0;
-    const existingIds = new Set(state.expenses.map(e => e.id));
-
-    rows.forEach(r => {
-      const id = String(r[10]||'').trim();
-      if (!id || existingIds.has(id)) return; // already have it
-
+    const newExpenses = sheetExpenses.map(r => {
+      const id       = String(r[10]||'').trim();
       const tripName = String(r[2]||'').trim();
-      // Find or auto-create matching trip by name
-      let trip = state.trips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
-      if (!trip && tripName) {
-        trip = {
-          id: 'sheet_' + tripName.replace(/\s+/g,'_') + '_' + Date.now(),
-          name: tripName, startDate:'', endDate:'', budget:0,
-          people:[], currency:'SGD', createdAt: new Date().toISOString()
-        };
-        state.trips.push(trip);
-      }
-      if (!trip) return;
-
+      const trip     = state.trips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
+      if (!trip) return null;
       const catLabel = String(r[3]||'').trim().toLowerCase();
-      const catId = CAT_LABEL_TO_ID[catLabel] || 'other';
-      const amount = parseFloat(r[5]) || 0;
-      const amountSGD = parseFloat(r[7]) || amount;
-
-      const expense = {
+      const catId    = CAT_LABEL_TO_ID[catLabel] || 'other';
+      return {
         id,
-        tripId: trip.id,
-        amount,
-        currency: String(r[6]||'SGD').trim(),
-        amountSGD,
-        category: catId,
-        note: String(r[4]||'').trim(),
-        date: String(r[0]||'').trim(),
-        time: String(r[1]||'').trim(),
-        paidBy: String(r[8]||'Me').trim(),
-        shared: String(r[9]||'No').trim().toLowerCase() === 'yes',
-        createdAt: new Date().toISOString(),
-        fromSheet: true
+        tripId:    trip.id,
+        amount:    parseFloat(r[5]) || 0,
+        currency:  String(r[6]||'SGD').trim(),
+        amountSGD: parseFloat(r[7]) || parseFloat(r[5]) || 0,
+        category:  catId,
+        note:      String(r[4]||'').trim(),
+        date:      String(r[0]||'').trim(),
+        time:      String(r[1]||'').trim(),
+        paidBy:    String(r[8]||'Me').trim(),
+        shared:    String(r[9]||'No').trim().toLowerCase() === 'yes',
+        createdAt: new Date().toISOString()
       };
-      state.expenses.push(expense);
-      existingIds.add(id);
-      added++;
-    });
+    }).filter(Boolean);
+
+    // Count genuinely new expenses (not previously in local state)
+    const existingIds = new Set(state.expenses.map(e => e.id));
+    const added = newExpenses.filter(e => !existingIds.has(e.id)).length;
+
+    // Full replace — sheets wins
+    state.expenses = newExpenses;
 
     save();
     setSyncState('ok');
-    renderTrips(); // always refresh trips list to show latest totals
-    if (added > 0) {
-      if (state.currentTripId) renderExpenses();
-      showToast(`✅ Pulled ${added} new expense${added>1?'s':''} from Sheets!`);
-    } else {
-      showToast('✅ Already up to date');
-    }
+    renderTrips();
+    if (state.currentTripId) renderExpenses();
+    if (added > 0) showToast(`✅ Pulled ${added} new expense${added>1?'s':''}!`);
+    else showToast('✅ Up to date');
+
   } catch(e) {
     setSyncState('error');
     showToast('⚠️ Pull failed — check internet/Apps Script');
+    console.error(e);
   }
-}
-
-// Auto-pull when opening a trip
-async function autoSync() {
-  if (!state.currentTripId) return;
-  await pullFromSheets();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1398,7 +1518,8 @@ function runConfirm() {
   closeConfirm();
 }
 
-function promptDeleteTrip(id, name) {
+function promptDeleteTrip(id, name, ev) {
+  if (ev) ev.stopPropagation();
   const trip = state.trips.find(t => t.id === id);
   const expenseCount = state.expenses.filter(e => e.tripId === id).length;
   showConfirm(
