@@ -526,6 +526,25 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: ADD CURRENCY ═══ -->
+<div class="modal-overlay" id="modal-add-currency">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Add Currency 💱</div>
+    <div class="form-group">
+      <label class="form-label">Currency Code</label>
+      <input class="form-input" id="new-currency-code" placeholder="e.g. HKD, JPY, THB" style="text-transform:uppercase">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Rate to SGD (1 unit = ? SGD)</label>
+      <input class="form-input" id="new-currency-rate" type="number" inputmode="decimal" step="0.0001" placeholder="e.g. 0.188 for CNY">
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Check Google for the latest rate</div>
+    </div>
+    <button class="btn-primary" onclick="saveCurrencyRate()">Add Currency ✓</button>
+    <button class="btn-secondary" onclick="closeModal('modal-add-currency')">Cancel</button>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════
 //  CONFIG
@@ -731,8 +750,13 @@ function _populateExpenseModal(trip, expense) {
   selectedCategory = expense?.category || null;
   isShared = expense?.shared || false;
 
-  const currencies = ['SGD', trip?.currency||'CNY'];
-  document.getElementById('currency-group').innerHTML = currencies.map((c,i) => {
+  // Always show SGD + every currency the user has added in Settings
+  const settingsCurrencies = Object.keys(state.settings.rates || {});
+  const tripCurrency = trip?.currency || '';
+  const allCurrencies = ['SGD', ...settingsCurrencies];
+  // Also include trip currency if somehow not in settings yet
+  if (tripCurrency && !allCurrencies.includes(tripCurrency)) allCurrencies.push(tripCurrency);
+  document.getElementById('currency-group').innerHTML = allCurrencies.map((c,i) => {
     const sel = expense ? c === expense.currency : i === 0;
     return `<div class="currency-btn ${sel?'selected':''}" onclick="selectCurrency('${c}',this)">${c}</div>`;
   }).join('');
@@ -1073,13 +1097,22 @@ function renderConversionRates() {
 }
 
 function addCurrencyRate() {
-  const cur = prompt('Currency code (e.g. CNY, JPY, THB):');
-  if (!cur) return;
-  const code = cur.trim().toUpperCase();
-  const rateStr = prompt(`1 ${code} = how many SGD? (e.g. 0.188)`);
-  if (!rateStr) return;
-  state.settings.rates[code] = parseFloat(rateStr)||0;
-  save(); renderConversionRates();
+  document.getElementById('new-currency-code').value = '';
+  document.getElementById('new-currency-rate').value = '';
+  openModal('modal-add-currency');
+  setTimeout(() => document.getElementById('new-currency-code').focus(), 400);
+}
+
+function saveCurrencyRate() {
+  const code = document.getElementById('new-currency-code').value.trim().toUpperCase();
+  const rate = parseFloat(document.getElementById('new-currency-rate').value);
+  if (!code) { showToast('Enter a currency code'); return; }
+  if (!rate || rate <= 0) { showToast('Enter a valid rate'); return; }
+  state.settings.rates[code] = rate;
+  save();
+  closeModal('modal-add-currency');
+  renderConversionRates();
+  showToast(code + ' added ✅');
 }
 
 function updateRate(cur,val) { state.settings.rates[cur]=parseFloat(val)||0; save(); }
