@@ -3,7 +3,6 @@
   "short_name": "TripLedger",
   "description": "Holiday spending tracker",
   "start_url": "/Finance-app-v2/",
-  "scope": "/Finance-app-v2/",
   "display": "standalone",
   "background_color": "#F5F3FF",
   "theme_color": "#7C5CFC",
