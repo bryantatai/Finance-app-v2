@@ -1455,8 +1455,8 @@ async function pullFromSheets() {
     const newTrips = sheetTrips.map(r => ({
       id:        String(r[0]||'').trim(),
       name:      String(r[1]||'').trim(),
-      startDate: String(r[2]||'').trim(),
-      endDate:   String(r[3]||'').trim(),
+      startDate: toISODate(String(r[2]||'').trim()),
+      endDate:   toISODate(String(r[3]||'').trim()),
       budget:    parseFloat(r[4]) || 0,
       people:    String(r[5]||'').split(',').map(p=>p.trim()).filter(Boolean),
       currency:  String(r[6]||'SGD').trim(),
@@ -1500,6 +1500,8 @@ async function pullFromSheets() {
       const trip     = newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
       if (!trip) return null;
       const catLabel = String(r[3]||'').trim().toLowerCase();
+      const rawDate  = String(r[0]||'').trim();
+      const rawTime  = String(r[1]||'').trim();
       return {
         id,
         tripId:    trip.id,
@@ -1508,8 +1510,8 @@ async function pullFromSheets() {
         amountSGD: parseFloat(r[7]) || parseFloat(r[5]) || 0,
         category:  CAT_LABEL_TO_ID[catLabel] || 'other',
         note:      String(r[4]||'').trim(),
-        date:      String(r[0]||'').trim(),
-        time:      String(r[1]||'').trim(),
+        date:      toISODate(rawDate) || rawDate, // always store as YYYY-MM-DD
+        time:      rawTime,
         paidBy:    String(r[8]||'Me').trim(),
         shared:    String(r[9]||'No').trim().toLowerCase() === 'yes',
         createdAt: new Date().toISOString()
@@ -1573,9 +1575,46 @@ function showToast(msg) {
   setTimeout(()=>t.classList.remove('show'), 2800);
 }
 
+function parseDate(d) {
+  // Normalise any date format coming from the sheet or local state into a JS Date
+  if (!d) return null;
+  const s = String(d).trim();
+  if (!s) return null;
+
+  // Already ISO: 2026-05-23 or 2026-05-23T...
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return new Date(s.slice(0,10) + 'T00:00:00');
+  }
+  // DD/MM/YYYY (Google Sheets SG locale)
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split('/');
+    return new Date(`${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}T00:00:00`);
+  }
+  // DD-MM-YYYY
+  if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split('-');
+    return new Date(`${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}T00:00:00`);
+  }
+  // MM/DD/YYYY (US locale from sheets)
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+    return new Date(s + 'T00:00:00');
+  }
+  // Fallback: let JS parse it
+  const fallback = new Date(s);
+  return isNaN(fallback) ? null : fallback;
+}
+
+function toISODate(d) {
+  // Convert any date format to YYYY-MM-DD for storage and sorting
+  const date = parseDate(d);
+  if (!date || isNaN(date)) return '';
+  return date.toISOString().slice(0,10);
+}
+
 function formatDate(d) {
   if (!d) return '';
-  const date = new Date(d+'T00:00:00');
+  const date = parseDate(d);
+  if (!date || isNaN(date)) return String(d); // show raw if unparseable
   return date.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
 }
 
@@ -1618,7 +1657,11 @@ function promptDeleteTrip(id, name, ev) {
 
 function formatDateRange(start, end) {
   if (!start && !end) return '';
-  const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString('en-SG', {day:'numeric', month:'short'});
+  const fmt = d => {
+    const date = parseDate(d);
+    if (!date || isNaN(date)) return String(d);
+    return date.toLocaleDateString('en-SG', {day:'numeric', month:'short'});
+  };
   if (start && end) return fmt(start) + ' → ' + fmt(end);
   if (start) return fmt(start);
   return fmt(end);
