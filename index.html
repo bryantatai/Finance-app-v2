@@ -862,7 +862,7 @@ async function saveEditTrip() {
     await syncTripToSheets(updated, 'update');
     // If trip name changed, update the trip name column in all expense rows
     if (oldTrip.name !== updated.name) {
-      await renameTripInExpenses(oldTrip.name, updated.name);
+      await renameTripInExpenses(oldTrip.name, updated.name, updated.id);
     }
   } catch(e) {
     showToast('⚠️ Trip update failed — saved locally only');
@@ -1379,9 +1379,10 @@ async function syncToSheets(expense) {
       (expense.amountSGD||0).toFixed(4),
       expense.paidBy||'Me',
       expense.shared?'Yes':'No',
-      expense.id
+      expense.id,
+      expense.tripId||''        // col 11: TripID — links expense to trip by ID
     ];
-    const res = await fetch(url, { method: 'POST', body: JSON.stringify({ row }) });
+    const res = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'addExpense', row }) });
     const data = await res.json();
     if (data.success) showToast('✅ Synced to Google Sheets!');
     else showToast('⚠️ Saved locally (sync failed)');
@@ -1464,13 +1465,13 @@ async function syncTripToSheets(trip, action, silent) {
 // ═══════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC — RENAME trip in expenses tab
 // ═══════════════════════════════════════════════════════
-async function renameTripInExpenses(oldName, newName) {
+async function renameTripInExpenses(oldName, newName, tripId) {
   const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
   if (!url || oldName === newName) return;
   try {
     const res = await fetch(url, {
       method: 'POST',
-      body: JSON.stringify({ action: 'renameTripInExpenses', oldName, newName })
+      body: JSON.stringify({ action: 'renameTripInExpenses', oldName, newName, tripId: tripId||'' })
     });
     const data = await res.json();
     if (!data.success) console.warn('renameTripInExpenses failed:', data.error);
@@ -1503,29 +1504,10 @@ async function deleteFromSheets(id) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  GOOGLE SHEETS SYNC — DELETE TRIP (all rows by trip name)
-// ═══════════════════════════════════════════════════════
-async function deleteTripFromSheets(tripName) {
-  const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
-  if (!url) return;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'deleteTrip', tripName: tripName })
-    });
-    const data = await res.json();
-    if (!data.success) console.warn('Sheet deleteTrip failed:', data.error);
-    else console.log('Sheet deleteTrip: removed ' + data.deletedCount + ' rows');
-  } catch(e) {
-    console.warn('Sheet deleteTrip error:', e.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC — PULL (read all rows, merge)
 // ═══════════════════════════════════════════════════════
-// Column order from sheet: Date(0) Time(1) Trip(2) Category(3) Note(4)
-//   Amount(5) Currency(6) AmountSGD(7) PaidBy(8) Shared(9) ID(10)
+// Expenses tab columns: Date(0) Time(1) Trip(2) Category(3) Note(4)
+//   Amount(5) Currency(6) AmountSGD(7) PaidBy(8) Shared(9) ExpenseID(10) TripID(11)
 const CAT_LABEL_TO_ID = {};
 CATEGORIES.forEach(c => { CAT_LABEL_TO_ID[c.label.toLowerCase()] = c.id; });
 
@@ -1642,16 +1624,22 @@ async function pullFromSheets() {
 
     // Map expenses to trip IDs
     const newExpenses = sheetExpenses.map(r => {
-      const id       = String(r[10]||'').trim();
-      const tripName = String(r[2]||'').trim();
-      const trip     = newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
+      const id          = String(r[10]||'').trim();
+      const tripName    = String(r[2]||'').trim();
+      const sheetTripId = String(r[11]||'').trim();
+      // Join by TripID first (reliable), fall back to name match (backward compat)
+      const trip = sheetTripId
+        ? newTrips.find(t => t.id === sheetTripId)
+          || newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase())
+        : newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
       if (!trip) return null;
-      const catLabel = String(r[3]||'').trim().toLowerCase();
-      const rawDate  = String(r[0]||'').trim();
-      const rawTime  = String(r[1]||'').trim();
+      const catLabel  = String(r[3]||'').trim().toLowerCase();
+      const rawDate   = String(r[0]||'').trim();
+      const rawTime   = String(r[1]||'').trim();
+      const sheetTripId = String(r[11]||'').trim(); // col 11: TripID (new)
       return {
         id,
-        tripId:    trip.id,
+        tripId:    trip.id,   // resolved from sheet TripID or name fallback
         amount:    parseFloat(r[5]) || 0,
         currency:  String(r[6]||'SGD').trim(),
         amountSGD: parseFloat(r[7]) || parseFloat(r[5]) || 0,
