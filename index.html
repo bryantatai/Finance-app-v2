@@ -431,6 +431,7 @@
     </div>
     <div class="settings-section" style="margin-top:20px">
       <h3>Currency Rates (to SGD)</h3>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Synced to Google Sheets · shared across all devices</div>
       <div id="conversion-rates-list"></div>
       <button class="btn-secondary" onclick="addCurrencyRate()" style="margin-top:8px">+ Add Currency</button>
     </div>
@@ -618,6 +619,7 @@ let deferredInstallPrompt = null;
 // ═══════════════════════════════════════════════════════
 //  STORAGE
 // ═══════════════════════════════════════════════════════
+// ── localStorage is a cache only — sheets is truth ──
 function save() {
   try { localStorage.setItem('tripledger_v2', JSON.stringify(state)); } catch(e) {}
 }
@@ -627,11 +629,11 @@ function load() {
     if (d) {
       const parsed = JSON.parse(d);
       state = { ...state, ...parsed };
-      if (!state.settings) state.settings = { sheetId: DEFAULT_SHEET_ID, appsScriptUrl: DEFAULT_APPS_SCRIPT_URL, rates: { CNY: 0.188 } };
-      if (!state.settings.rates) state.settings.rates = { CNY: 0.188 };
-      // Migrate old apiKey field → appsScriptUrl
-      if (!state.settings.appsScriptUrl) state.settings.appsScriptUrl = DEFAULT_APPS_SCRIPT_URL;
     }
+    // Always ensure settings structure exists
+    if (!state.settings) state.settings = {};
+    if (!state.settings.appsScriptUrl) state.settings.appsScriptUrl = DEFAULT_APPS_SCRIPT_URL;
+    if (!state.settings.rates) state.settings.rates = {};
   } catch(e) {}
 }
 
@@ -1184,7 +1186,7 @@ function addCurrencyRate() {
   setTimeout(() => document.getElementById('new-currency-code').focus(), 400);
 }
 
-function saveCurrencyRate() {
+async function saveCurrencyRate() {
   const code = document.getElementById('new-currency-code').value.trim().toUpperCase();
   const rate = parseFloat(document.getElementById('new-currency-rate').value);
   if (!code) { showToast('Enter a currency code'); return; }
@@ -1193,11 +1195,22 @@ function saveCurrencyRate() {
   save();
   closeModal('modal-add-currency');
   renderConversionRates();
-  showToast(code + ' added ✅');
+  showToast(code + ' saving...');
+  await syncSettingsToSheets();
+  showToast(code + ' saved ✅');
 }
 
-function updateRate(cur,val) { state.settings.rates[cur]=parseFloat(val)||0; save(); }
-function removeRate(cur) { delete state.settings.rates[cur]; save(); renderConversionRates(); }
+async function updateRate(cur,val) {
+  state.settings.rates[cur]=parseFloat(val)||0;
+  save();
+  await syncSettingsToSheets();
+}
+async function removeRate(cur) {
+  delete state.settings.rates[cur];
+  save();
+  renderConversionRates();
+  await syncSettingsToSheets();
+}
 
 async function saveSettings() {
   state.settings.sheetId = document.getElementById('setting-sheet-id').value.trim();
@@ -1272,6 +1285,26 @@ async function syncToSheets(expense) {
     else showToast('⚠️ Saved locally (sync failed)');
   } catch(e) {
     showToast('⚠️ Saved locally (no internet)');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  GOOGLE SHEETS SYNC — SETTINGS (currency rates tab)
+// ═══════════════════════════════════════════════════════
+async function syncSettingsToSheets() {
+  const url = state.settings.appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
+  if (!url) return;
+  try {
+    // Send full rates object — Apps Script replaces the whole Settings tab
+    const rows = Object.entries(state.settings.rates || {}).map(([code, rate]) => [code, rate]);
+    const res  = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'saveSettings', rows })
+    });
+    const data = await res.json();
+    if (!data.success) console.warn('Settings sync failed:', data.error);
+  } catch(e) {
+    console.warn('Settings sync error:', e.message);
   }
 }
 
@@ -1387,23 +1420,37 @@ async function pullFromSheets() {
   if (!url) { showToast('⚠️ Set Apps Script URL in Settings first'); return; }
   setSyncState('syncing');
   try {
-    // Pull BOTH tabs in parallel
-    const [tripsRes, expensesRes] = await Promise.all([
-      fetch(url + '?action=getTrips', { method: 'GET' }),
-      fetch(url + '?action=getAll',   { method: 'GET' })
+    // Pull ALL THREE tabs in parallel — sheets is the single source of truth
+    const [tripsRes, expensesRes, settingsRes] = await Promise.all([
+      fetch(url + '?action=getTrips',    { method: 'GET' }),
+      fetch(url + '?action=getAll',      { method: 'GET' }),
+      fetch(url + '?action=getSettings', { method: 'GET' })
     ]);
     const tripsData    = await tripsRes.json();
     const expensesData = await expensesRes.json();
+    const settingsData = await settingsRes.json();
 
     if (!tripsData.success || !expensesData.success) {
       setSyncState('error');
-      showToast('⚠️ Could not pull from Sheets');
+      showToast('⚠️ Sync failed — check Apps Script');
       return;
     }
 
-    // ── Rebuild trips from Trips tab (sheets = source of truth) ──
+    // ══ 1. SETTINGS — currency rates from Settings tab ══
+    if (settingsData.success && Array.isArray(settingsData.rows)) {
+      const newRates = {};
+      settingsData.rows.forEach(r => {
+        const code = String(r[0]||'').trim().toUpperCase();
+        const rate = parseFloat(r[1]);
+        if (code && !isNaN(rate) && rate > 0) newRates[code] = rate;
+      });
+      // Merge: sheet wins, but keep appsScriptUrl from local
+      state.settings.rates = newRates;
+    }
+
+    // ══ 2. TRIPS — fully rebuilt from Trips tab ══
     const sheetTrips = (tripsData.rows || []).filter(r =>
-      r[0] && String(r[0]) !== 'ID' && !String(r[0]).includes('__')
+      r[0] && String(r[0]).trim() !== '' && String(r[0]) !== 'ID' && !String(r[0]).includes('__')
     );
     const newTrips = sheetTrips.map(r => ({
       id:        String(r[0]||'').trim(),
@@ -1416,64 +1463,50 @@ async function pullFromSheets() {
       createdAt: String(r[7]||'').trim()
     })).filter(t => t.id && t.name);
 
-    // Merge: keep any local-only trips (newly created, not yet in sheet)
-    const sheetTripIds = new Set(newTrips.map(t => t.id));
-    const localOnlyTrips = state.trips.filter(t => !sheetTripIds.has(t.id));
-    state.trips = [...newTrips, ...localOnlyTrips];
-
-    // ── Rebuild expenses from Expenses tab ──
+    // ══ 3. EXPENSES — fully rebuilt from Expenses tab ══
     const sheetExpenses = (expensesData.rows || []).filter(r =>
       r[10] && r[10] !== 'ID' && !String(r[10]).includes('__')
     );
 
-    // Detect trip names in expenses that have no Trips tab row → auto-register them
-    const tripsToRegister = [];
+    // Auto-register any trip names found in expenses but missing from Trips tab
     const seenOrphanNames = new Set();
+    const tripsToRegister = [];
     sheetExpenses.forEach(r => {
       const tripName = String(r[2]||'').trim();
       if (!tripName) return;
-      const already = state.trips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
-      if (!already && !seenOrphanNames.has(tripName.toLowerCase())) {
+      const exists = newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
+      if (!exists && !seenOrphanNames.has(tripName.toLowerCase())) {
         seenOrphanNames.add(tripName.toLowerCase());
-        // Infer currency from the expense rows for this trip
         const tripRows = sheetExpenses.filter(er => String(er[2]||'').trim().toLowerCase() === tripName.toLowerCase());
-        const foreignCurrencies = tripRows.map(er => String(er[6]||'SGD').trim()).filter(c => c !== 'SGD');
-        const inferredCurrency = foreignCurrencies.length ? foreignCurrencies[0] : 'SGD';
+        const foreignCurs = tripRows.map(er => String(er[6]||'SGD').trim()).filter(c => c !== 'SGD');
         const ghostTrip = {
-          id:        'migrated_' + tripName.replace(/[^a-zA-Z0-9]/g,'_') + '_' + Date.now(),
-          name:      tripName,
-          startDate: '',
-          endDate:   '',
-          budget:    0,
-          people:    [],
-          currency:  inferredCurrency,
+          id: 'migrated_' + tripName.replace(/[^a-zA-Z0-9]/g,'_') + '_' + Date.now(),
+          name: tripName, startDate: '', endDate: '', budget: 0,
+          people: [], currency: foreignCurs[0] || 'SGD',
           createdAt: new Date().toISOString()
         };
-        state.trips.push(ghostTrip);
+        newTrips.push(ghostTrip);
         tripsToRegister.push(ghostTrip);
       }
     });
-
-    // Fire-and-forget: register orphaned trips to the Trips tab
     if (tripsToRegister.length) {
-      tripsToRegister.forEach(t => syncTripToSheets(t, 'add', true)); // silent
-      console.log('Auto-registered ' + tripsToRegister.length + ' orphaned trip(s) to Trips tab');
+      tripsToRegister.forEach(t => syncTripToSheets(t, 'add', true));
     }
 
+    // Map expenses to trip IDs
     const newExpenses = sheetExpenses.map(r => {
       const id       = String(r[10]||'').trim();
       const tripName = String(r[2]||'').trim();
-      const trip     = state.trips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
+      const trip     = newTrips.find(t => t.name.toLowerCase() === tripName.toLowerCase());
       if (!trip) return null;
       const catLabel = String(r[3]||'').trim().toLowerCase();
-      const catId    = CAT_LABEL_TO_ID[catLabel] || 'other';
       return {
         id,
         tripId:    trip.id,
         amount:    parseFloat(r[5]) || 0,
         currency:  String(r[6]||'SGD').trim(),
         amountSGD: parseFloat(r[7]) || parseFloat(r[5]) || 0,
-        category:  catId,
+        category:  CAT_LABEL_TO_ID[catLabel] || 'other',
         note:      String(r[4]||'').trim(),
         date:      String(r[0]||'').trim(),
         time:      String(r[1]||'').trim(),
@@ -1483,24 +1516,35 @@ async function pullFromSheets() {
       };
     }).filter(Boolean);
 
-    // Count genuinely new expenses (not previously in local state)
-    const existingIds = new Set(state.expenses.map(e => e.id));
-    const added = newExpenses.filter(e => !existingIds.has(e.id)).length;
+    // Count what’s genuinely new vs what we had
+    const prevExpenseCount = state.expenses.length;
+    const prevTripCount    = state.trips.length;
 
-    // Full replace — sheets wins
+    // FULL REPLACE — sheets wins entirely
+    state.trips    = newTrips;
     state.expenses = newExpenses;
 
+    // Persist cache
     save();
     setSyncState('ok');
+
+    // Re-render everything
     renderTrips();
     if (state.currentTripId) renderExpenses();
-    if (added > 0) showToast(`✅ Pulled ${added} new expense${added>1?'s':''}!`);
-    else showToast('✅ Up to date');
+    renderConversionRates();
+
+    const newExpCount  = newExpenses.length - prevExpenseCount;
+    const newTripCount = newTrips.length - prevTripCount;
+    if (newExpCount > 0 || newTripCount > 0) {
+      showToast('✅ Synced — ' + (newTripCount > 0 ? newTripCount + ' trip(s) ' : '') + (newExpCount > 0 ? newExpCount + ' expense(s)' : ''));
+    } else {
+      showToast('✅ Up to date');
+    }
 
   } catch(e) {
     setSyncState('error');
-    showToast('⚠️ Pull failed — check internet/Apps Script');
-    console.error(e);
+    showToast('⚠️ Sync failed — check internet');
+    console.error('pullFromSheets error:', e);
   }
 }
 
