@@ -1,47 +1,88 @@
-// TripLedger Service Worker v5
-// Minimal — matching the approach of the version that worked
+// TripLedger Service Worker v6
+// Chrome Android PWA installability compliant
 
-const CACHE_NAME = 'tripledger-v5';
+const CACHE_NAME = 'tripledger-v6';
+const PRECACHE = [
+  '/Finance-app-v2/',
+  '/Finance-app-v2/index.html',
+  '/Finance-app-v2/manifest.json',
+  '/Finance-app-v2/icon192.png',
+  '/Finance-app-v2/icon512.png'
+];
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.addAll([
-        '/Finance-app-v2/',
-        '/Finance-app-v2/index.html',
-        '/Finance-app-v2/manifest.json',
-        '/Finance-app-v2/icon192.png',
-        '/Finance-app-v2/icon512.png'
-      ]);
-    }).catch(err => console.log('[SW] Cache install error (non-fatal):', err))
+    caches.open(CACHE_NAME)
+      .then(cache => {
+        // Add each asset individually so one 404 doesn't break the whole install
+        return Promise.all(
+          PRECACHE.map(url =>
+            cache.add(url).catch(err => console.warn('[SW] Could not precache:', url, err))
+          )
+        );
+      })
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    )
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', event => {
-  // Skip non-GET and cross-origin API calls
-  if (event.request.method !== 'GET') return;
-  if (event.request.url.includes('script.google.com')) return;
+  const req = event.request;
+  const url = new URL(req.url);
 
+  // Never intercept Apps Script or Google API calls — must reach network
+  if (url.hostname.includes('script.google.com') ||
+      url.hostname.includes('googleapis.com')) {
+    // Chrome requires respondWith to be called for ALL intercepted requests
+    // Use passthrough fetch for these
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  // Google Fonts — cache first (offline resilience)
+  if (url.hostname === 'fonts.googleapis.com' ||
+      url.hostname === 'fonts.gstatic.com') {
+    event.respondWith(
+      caches.match(req).then(cached => {
+        if (cached) return cached;
+        return fetch(req).then(res => {
+          caches.open(CACHE_NAME).then(c => c.put(req, res.clone()));
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  // Everything else — network first, fall back to cache
+  // For navigation requests (HTML), always fall back to cached index.html
   event.respondWith(
-    fetch(event.request)
+    fetch(req)
       .then(res => {
-        // Cache successful responses
-        if (res && res.status === 200) {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        if (res && res.status === 200 && req.method === 'GET') {
+          caches.open(CACHE_NAME).then(c => c.put(req, res.clone()));
         }
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => {
+        // Offline fallback
+        return caches.match(req).then(cached => {
+          if (cached) return cached;
+          // For navigation, serve index.html from cache
+          if (req.mode === 'navigate') {
+            return caches.match('/Finance-app-v2/index.html');
+          }
+          return new Response('Offline', { status: 503 });
+        });
+      })
   );
 });
