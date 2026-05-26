@@ -39,12 +39,15 @@ self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Never intercept Apps Script or Google API calls — must reach network
+  // Never intercept Apps Script or Google API calls — let the browser handle
+  // them natively.  Calling event.respondWith(fetch(req)) here would issue the
+  // request from the SW worker context, which Playwright's page.route() cannot
+  // intercept (CDP Fetch only sees renderer-process requests).  By returning
+  // WITHOUT calling event.respondWith() the browser falls through to its own
+  // network stack, which IS interceptable by page.route() in tests and reaches
+  // the real network identically in production.
   if (url.hostname.includes('script.google.com') ||
       url.hostname.includes('googleapis.com')) {
-    // Chrome requires respondWith to be called for ALL intercepted requests
-    // Use passthrough fetch for these
-    event.respondWith(fetch(req));
     return;
   }
 
