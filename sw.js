@@ -1,7 +1,7 @@
-// TripLedger Service Worker v6
+// TripLedger Service Worker v8
 // Chrome Android PWA installability compliant
 
-const CACHE_NAME = 'tripledger-v6';
+const CACHE_NAME = 'tripledger-v8';
 const PRECACHE = [
   '/Finance-app-v2/',
   '/Finance-app-v2/index.html',
