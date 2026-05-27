@@ -176,6 +176,18 @@
   }
   .chip.selected { background: var(--violet); border-color: var(--violet); color: white; }
 
+  /* ── Category filter chips on the expenses screen ── */
+  .filter-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 14px; border-radius: 20px; border: none;
+    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    background: var(--violet-light); color: var(--violet);
+    font-family: 'Sora', sans-serif; flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .filter-chip.active { background: var(--violet); color: white; }
+  #category-filter-chips::-webkit-scrollbar { display: none; }
+
   .currency-group { display: flex; gap: 8px; }
   .currency-btn {
     flex: 1; padding: 12px 8px; text-align: center;
@@ -384,6 +396,7 @@
       <div style="font-family:'Sora',sans-serif;font-size:17px;font-weight:700">All Expenses</div>
       <div style="font-size:12px;color:var(--text-muted)" id="expense-count">0 items</div>
     </div>
+    <div id="category-filter-chips" style="display:none;gap:8px;padding:0 16px 12px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;flex-shrink:0"></div>
     <div id="expenses-list"></div>
   </div>
 
@@ -631,6 +644,7 @@ let state = {
 };
 let selectedCategory = null;
 let isShared = false;
+let activeCategoryFilter = null; // null = show all categories
 let currentScreen = 'trips';
 let deferredInstallPrompt = null;
 
@@ -871,6 +885,7 @@ async function saveEditTrip() {
 
 function openTrip(id) {
   state.currentTripId = id;
+  activeCategoryFilter = null; // always start with all categories visible
   const trip = state.trips.find(t => t.id === id);
   document.getElementById('trip-title').textContent = trip.name;
   document.getElementById('trip-dates-header').textContent = formatDateRange(trip.startDate, trip.endDate);
@@ -1073,12 +1088,23 @@ async function saveExpense() {
 }
 
 function renderExpenses() {
-  const expenses = state.expenses.filter(e => e.tripId === state.currentTripId);
-  document.getElementById('expense-count').textContent = expenses.length + ' items';
+  renderFilterChips();
+  const allExpenses = state.expenses.filter(e => e.tripId === state.currentTripId);
+  const expenses = activeCategoryFilter
+    ? allExpenses.filter(e => e.category === activeCategoryFilter)
+    : allExpenses;
+  document.getElementById('expense-count').textContent = activeCategoryFilter
+    ? expenses.length + ' of ' + allExpenses.length + ' items'
+    : allExpenses.length + ' items';
   const list = document.getElementById('expenses-list');
 
   if (!expenses.length) {
-    list.innerHTML = `<div class="empty-state"><div class="emoji">🧾</div><p>No expenses yet.<br>Tap + to add your first one!</p></div>`;
+    if (activeCategoryFilter) {
+      const catName = CATEGORIES.find(c => c.id === activeCategoryFilter)?.label || '';
+      list.innerHTML = `<div class="empty-state"><div class="emoji">🔍</div><p>No ${esc(catName)} expenses.<br>Tap a different filter to browse.</p></div>`;
+    } else {
+      list.innerHTML = `<div class="empty-state"><div class="emoji">🧾</div><p>No expenses yet.<br>Tap + to add your first one!</p></div>`;
+    }
     updateTripHeader(); return;
   }
 
@@ -1126,6 +1152,38 @@ function deleteExpense(id, ev) {
       showToast('Deleted from Sheets ✅');
     }
   );
+}
+
+// ═══════════════════════════════════════════════════════
+//  CATEGORY FILTER CHIPS
+// ═══════════════════════════════════════════════════════
+function renderFilterChips() {
+  const container = document.getElementById('category-filter-chips');
+  if (!container) return;
+  const allExpenses = state.expenses.filter(e => e.tripId === state.currentTripId);
+  const usedIds = [...new Set(allExpenses.map(e => e.category))];
+  // Auto-reset if the active filter category no longer has any expenses
+  if (activeCategoryFilter && !usedIds.includes(activeCategoryFilter)) activeCategoryFilter = null;
+  const usedCats = CATEGORIES.filter(c => usedIds.includes(c.id));
+  // Only show chips when there are 2+ distinct categories
+  if (usedCats.length < 2) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+  const all = [{ id: null, label: 'All', icon: null }, ...usedCats];
+  container.innerHTML = all.map(c => {
+    const active = activeCategoryFilter === c.id;
+    const iconHtml = c.icon ? `<span>${c.icon}</span> ` : '';
+    return `<button class="filter-chip${active ? ' active' : ''}" onclick="setFilter(${c.id === null ? 'null' : `'${c.id}'`})">${iconHtml}${c.label}</button>`;
+  }).join('');
+}
+
+function setFilter(catId) {
+  activeCategoryFilter = catId;
+  renderFilterChips();
+  renderExpenses();
 }
 
 function updateTripHeader() {
